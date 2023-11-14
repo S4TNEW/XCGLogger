@@ -43,7 +43,7 @@ open class DailyRotatingFileDestination: FileDestination {
 
         self.currentLogStartTimeInterval = Date().timeIntervalSince1970
         self.archiveSuffixDateFormatter = archiveSuffixDateFormatter
-        
+
         guard let writeToFileURL = writeToFileURL else { return }
 
         // Calculate some details for naming archived logs based on the current log file path/name
@@ -61,9 +61,13 @@ open class DailyRotatingFileDestination: FileDestination {
             let archiveFolderPath: String = String(filePath[filePath.startIndex ..< logFileNameRange.lowerBound])
             archiveFolderURL = URL(fileURLWithPath: "\(archiveFolderPath)")
         }
+
         if archiveFolderURL == nil {
             archiveFolderURL = type(of: self).defaultLogFolderURL
         }
+
+        // remember creation date of current log file for correct rotation
+        currentLogStartTimeInterval =  (self.creationDateOfWriteFileUrl ?? Date()).timeIntervalSince1970
 
         // Because we always start by appending, regardless of the shouldAppend setting, we now need to handle the cases where we don't want to append or that we have now reached the rotation threshold for our current log file
         if !shouldAppend || shouldRotate() {
@@ -81,16 +85,8 @@ open class DailyRotatingFileDestination: FileDestination {
         guard let writeToFileURL = self.writeToFileURL else { return }
         guard let archiveSuffixDateFormatter = self.archiveSuffixDateFormatter else { return }
 
-        var suffix: String?
-        do {
-            let fileAttributes: [FileAttributeKey: Any] = try FileManager.default.attributesOfItem(atPath: writeToFileURL.path)
-            suffix = archiveSuffixDateFormatter.string(from: fileAttributes[.creationDate] as? Date ?? Date())
-        }
-        catch let error as NSError {
-            owner?._logln("Unable to determine current file attributes of log file: \(error.localizedDescription)", level: .warning)
-        }
-
-        guard let suffix = suffix else { return }
+        // suffix from log file creation date
+        let suffix = archiveSuffixDateFormatter.string(from: self.creationDateOfWriteFileUrl ?? Date())
 
         var archiveFolderURL: URL = (self.archiveFolderURL ?? type(of: self).defaultLogFolderURL)
         archiveFolderURL = archiveFolderURL.appendingPathComponent("\(baseFileName)\(suffix)")
@@ -115,7 +111,7 @@ open class DailyRotatingFileDestination: FileDestination {
         // Do not rotate until critical setup has been completed so that we do not accidentally rotate once to the defaultLogFolderURL before determining the desired log location
         guard archiveFolderURL != nil else { return false }
 
-        // Alter: wir rotieren nur um Mitternacht
+        // rotate when start of new day has passed
         let midnightOfToday = Calendar(identifier: .gregorian).startOfDay(for: Date())
         if (midnightOfToday.timeIntervalSince1970 > currentLogStartTimeInterval)
         {

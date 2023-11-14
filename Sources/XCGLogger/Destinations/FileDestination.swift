@@ -32,7 +32,7 @@ open class FileDestination: BaseQueuedDestination {
             openFile()
         }
     }
-    
+
     /// File handle for the log file
     internal var logFileHandle: FileHandle? = nil
 
@@ -72,6 +72,24 @@ open class FileDestination: BaseQueuedDestination {
             guard let archiveFolderURL = archiveFolderURL else { return }
             try? FileManager.default.createDirectory(at: archiveFolderURL, withIntermediateDirectories: true)
         }
+    }
+
+    /// The creation date of the current log file
+    open var creationDateOfWriteFileUrl: Date?
+    {
+        guard let writeToFileURL = writeToFileURL else { return nil}
+
+        var ret: Date?
+        do {
+            // Initialize starting values for file start time so shouldRotate calculations are valid
+            let fileAttributes: [FileAttributeKey: Any] = try FileManager.default.attributesOfItem(atPath: writeToFileURL.path)
+            ret = fileAttributes[.creationDate] as? Date
+        }
+        catch let error as NSError {
+            owner?._logln("Unable to determine current file attributes of log file: \(error.localizedDescription)", level: .warning)
+        }
+
+        return ret
     }
 
     // MARK: - Life Cycle
@@ -130,12 +148,12 @@ open class FileDestination: BaseQueuedDestination {
                 logFileHandle?.seekToEndOfFile()
 
                 if let appendMarker = appendMarker,
-                    let encodedData = "\(appendMarker)\n".data(using: String.Encoding.utf8) {
+                   let encodedData = "\(appendMarker)\n".data(using: String.Encoding.utf8) {
 
                     _try({
                         self.logFileHandle?.write(encodedData)
                     },
-                    catch: { (exception: NSException) in
+                         catch: { (exception: NSException) in
                         print("Objective-C Exception occurred: \(exception)")
                     })
                 }
@@ -213,7 +231,7 @@ open class FileDestination: BaseQueuedDestination {
         }
 
         if let archiveToFileURL = archiveToFileURL,
-          let writeToFileURL = writeToFileURL {
+           let writeToFileURL = writeToFileURL {
 
             let fileManager: FileManager = FileManager.default
             guard !fileManager.fileExists(atPath: archiveToFileURL.path) else { closure?(false); return false }
@@ -341,7 +359,7 @@ open class FileDestination: BaseQueuedDestination {
             _try({
                 self.logFileHandle?.write(encodedData)
             },
-            catch: { (exception: NSException) in
+                 catch: { (exception: NSException) in
                 print("Objective-C Exception occurred: \(exception)")
             })
         }
