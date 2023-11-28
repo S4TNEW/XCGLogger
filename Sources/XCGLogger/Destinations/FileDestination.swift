@@ -78,6 +78,7 @@ open class FileDestination: BaseQueuedDestination {
     open var creationDateOfWriteFileUrl: Date?
     {
         guard let writeToFileURL = writeToFileURL else { return nil}
+        guard FileManager.default.fileExists(atPath: writeToFileURL.path) else { return nil}
 
         var ret: Date?
         do {
