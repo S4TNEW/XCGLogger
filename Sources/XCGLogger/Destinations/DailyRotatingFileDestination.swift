@@ -83,6 +83,7 @@ open class DailyRotatingFileDestination: FileDestination {
     ///
     open func rotateFile() {
         guard let writeToFileURL = self.writeToFileURL else { return }
+        guard FileManager.default.fileExists(atPath: writeToFileURL.path) else { return }
         guard let archiveSuffixDateFormatter = self.archiveSuffixDateFormatter else { return }
 
         // suffix from log file creation date
@@ -109,7 +110,8 @@ open class DailyRotatingFileDestination: FileDestination {
     ///
     open func shouldRotate() -> Bool {
         // Do not rotate until critical setup has been completed so that we do not accidentally rotate once to the defaultLogFolderURL before determining the desired log location
-        guard archiveFolderURL != nil else { return false }
+        guard let writeToFileURL = self.writeToFileURL else { return false }
+        guard FileManager.default.fileExists(atPath: writeToFileURL.path) else { return false }
 
         // rotate when start of new day has passed
         let midnightOfToday = Calendar(identifier: .gregorian).startOfDay(for: Date())
