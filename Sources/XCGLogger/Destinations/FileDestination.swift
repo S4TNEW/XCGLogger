@@ -45,6 +45,53 @@ open class FileDestination: BaseQueuedDestination {
     /// Option: Attributes to use when creating a new file
     internal var fileAttributes: [FileAttributeKey: Any]? = nil
 
+    /// Option: the desired number of archived log files to keep (number of log files may exceed this, it's a guideline only)
+    open var targetMaxLogFiles: UInt8 = 10 {
+        didSet {
+            cleanUpLogFiles()
+        }
+    }
+
+    /// A default folder for storing archived logs if one isn't supplied
+    open class var defaultLogFolderURL: URL {
+#if os(OSX)
+        let defaultLogFolderURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("log")
+        try? FileManager.default.createDirectory(at: defaultLogFolderURL, withIntermediateDirectories: true)
+        return defaultLogFolderURL
+#elseif os(iOS) || os(tvOS) || os(watchOS)
+        let urls = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+        let defaultLogFolderURL = urls[urls.endIndex - 1].appendingPathComponent("log")
+        try? FileManager.default.createDirectory(at: defaultLogFolderURL, withIntermediateDirectories: true)
+        return defaultLogFolderURL
+#endif
+    }
+
+    /// Option: the URL of the folder to store archived log files (defaults to the same folder as the initial log file)
+    open var archiveFolderURL: URL? = nil {
+        didSet {
+            guard let archiveFolderURL = archiveFolderURL else { return }
+            try? FileManager.default.createDirectory(at: archiveFolderURL, withIntermediateDirectories: true)
+        }
+    }
+
+    /// The creation date of the current log file
+    open var creationDateOfWriteFileUrl: Date?
+    {
+        guard let writeToFileURL = writeToFileURL else { return nil}
+
+        var ret: Date?
+        do {
+            // Initialize starting values for file start time so shouldRotate calculations are valid
+            let fileAttributes: [FileAttributeKey: Any] = try FileManager.default.attributesOfItem(atPath: writeToFileURL.path)
+            ret = fileAttributes[.creationDate] as? Date
+        }
+        catch let error as NSError {
+            owner?._logln("Unable to determine current file attributes of log file: \(error.localizedDescription)", level: .warning)
+        }
+
+        return ret
+    }
+
     // MARK: - Life Cycle
     public init(owner: XCGLogger? = nil, writeToFile: Any, identifier: String = "", shouldAppend: Bool = false, appendMarker: String? = "-- ** ** ** --", attributes: [FileAttributeKey: Any]? = nil) {
         self.shouldAppend = shouldAppend
@@ -101,12 +148,12 @@ open class FileDestination: BaseQueuedDestination {
                 logFileHandle?.seekToEndOfFile()
 
                 if let appendMarker = appendMarker,
-                    let encodedData = "\(appendMarker)\n".data(using: String.Encoding.utf8) {
+                   let encodedData = "\(appendMarker)\n".data(using: String.Encoding.utf8) {
 
                     _try({
                         self.logFileHandle?.write(encodedData)
                     },
-                    catch: { (exception: NSException) in
+                         catch: { (exception: NSException) in
                         print("Objective-C Exception occurred: \(exception)")
                     })
                 }
@@ -184,7 +231,7 @@ open class FileDestination: BaseQueuedDestination {
         }
 
         if let archiveToFileURL = archiveToFileURL,
-          let writeToFileURL = writeToFileURL {
+           let writeToFileURL = writeToFileURL {
 
             let fileManager: FileManager = FileManager.default
             guard !fileManager.fileExists(atPath: archiveToFileURL.path) else { closure?(false); return false }
@@ -224,6 +271,81 @@ open class FileDestination: BaseQueuedDestination {
         return false
     }
 
+    // MARK: - Utility Methods
+    /// Scan the log folder and delete log files that are no longer relevant.
+    ///
+    /// - Parameters:   None.
+    ///
+    /// - Returns:      Nothing.
+    ///
+    open func cleanUpLogFiles() {
+        var archivedFileURLs: [URL] = self.archivedFileURLs()
+        guard archivedFileURLs.count > Int(targetMaxLogFiles) else { return }
+
+        archivedFileURLs.removeFirst(Int(targetMaxLogFiles))
+
+        let fileManager: FileManager = FileManager.default
+        for archivedFileURL in archivedFileURLs {
+            do {
+                try fileManager.removeItem(at: archivedFileURL)
+            }
+            catch let error as NSError {
+                owner?._logln("Unable to delete old archived log file \(archivedFileURL.path): \(error.localizedDescription)", level: .error)
+            }
+        }
+    }
+
+    /// Delete all archived log files.
+    ///
+    /// - Parameters:   None.
+    ///
+    /// - Returns:      Nothing.
+    ///
+    open func purgeArchivedLogFiles() {
+        let fileManager: FileManager = FileManager.default
+        for archivedFileURL in archivedFileURLs() {
+            do {
+                try fileManager.removeItem(at: archivedFileURL)
+            }
+            catch let error as NSError {
+                owner?._logln("Unable to delete old archived log file \(archivedFileURL.path): \(error.localizedDescription)", level: .error)
+            }
+        }
+    }
+
+    /// Get the URLs of the archived log files.
+    ///
+    /// - Parameters:   None.
+    ///
+    /// - Returns:      An array of file URLs pointing to previously archived log files, sorted with the most recent logs first.
+    ///
+    open func archivedFileURLs() -> [URL] {
+        let archiveFolderURL: URL = (self.archiveFolderURL ?? type(of: self).defaultLogFolderURL)
+        guard let fileURLs = try? FileManager.default.contentsOfDirectory(at: archiveFolderURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return [] }
+        guard let identifierData: Data = identifier.data(using: .utf8) else { return [] }
+
+        var archivedDetails: [(url: URL, timestamp: String)] = []
+        for fileURL in fileURLs {
+            guard let archivedLogIdentifierOptionalData = ((try? fileURL.extendedAttribute(forName: XCGLogger.Constants.extendedAttributeArchivedLogIdentifierKey)) as Data??) else { continue }
+            guard let archivedLogIdentifierData = archivedLogIdentifierOptionalData else { continue }
+            guard archivedLogIdentifierData == identifierData else { continue }
+
+            guard let timestampOptionalData = ((try? fileURL.extendedAttribute(forName: XCGLogger.Constants.extendedAttributeArchivedLogTimestampKey)) as Data??) else { continue }
+            guard let timestampData = timestampOptionalData else { continue }
+            guard let timestamp = String(data: timestampData, encoding: .utf8) else { continue }
+
+            archivedDetails.append((fileURL, timestamp))
+        }
+
+        archivedDetails.sort(by: { (lhs, rhs) -> Bool in lhs.timestamp > rhs.timestamp })
+        var archivedFileURLs: [URL] = []
+        for archivedDetail in archivedDetails {
+            archivedFileURLs.append(archivedDetail.url)
+        }
+
+        return archivedFileURLs
+    }
+
     // MARK: - Overridden Methods
     /// Write the log to the log file.
     ///
@@ -237,7 +359,7 @@ open class FileDestination: BaseQueuedDestination {
             _try({
                 self.logFileHandle?.write(encodedData)
             },
-            catch: { (exception: NSException) in
+                 catch: { (exception: NSException) in
                 print("Objective-C Exception occurred: \(exception)")
             })
         }
